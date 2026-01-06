@@ -21,10 +21,10 @@ def load_instance(path: Path) -> QCSPInstance:
         header = f.readline().strip().replace(" ", "").split(",")
         n, b, phi_sz, psi_sz, q, t, s = map(int, header)
 
-        processing = list(map(int, f.readline().split()))
-        locations = list(map(int, f.readline().split()))
-        ready_times = list(map(int, f.readline().split()))
-        init_pos = list(map(int, f.readline().split()))
+        processing = list(map(int, f.readline().split(",")))
+        locations = list(map(int, f.readline().split(",")))
+        ready_times = list(map(int, f.readline().split(",")))
+        init_pos = list(map(int, f.readline().split(",")))
 
         if not f.readline().lower().startswith("phi"):
             raise ValueError("Linha 'Phi:' ausente")
@@ -62,28 +62,38 @@ def load_instance(path: Path) -> QCSPInstance:
 
 def evaluate_schedule(
     instance: QCSPInstance,
+    order_matrix: List[List[int]],
     start_times: List[float],
-    task_crane: List[int],
 ):
     """Compute makespan and validate constraints for a schedule.
+
+    Args:
+        instance: QCSPInstance com dados do problema
+        order_matrix: matriz q x m, linha i = guindaste i, valores = ids de tarefas em ordem
+        start_times: tempos de início (tamanho n)
 
     Constraints checked:
     - Precedence: predecessors finish before successors start.
     - Non-simultaneous pairs (Psi): intervals do not overlap.
-    - Travel/ready times per crane: respect move time from previous bay (or initial bay) and ready time.
+    - Travel/ready times per crane: respect move time and ready time for each crane.
     - Safety margin: overlapping tasks on different cranes must keep bay distance >= safety_margin.
     """
 
     n = len(instance.processing_times)
-    if len(start_times) != n or len(task_crane) != n:
-        raise ValueError("start_times e task_crane devem ter tamanho n")
-
-    q = len(instance.cranes_ready)
-    if any(c < 1 or c > q for c in task_crane):
-        raise ValueError("Ids de guindaste devem estar entre 1 e q")
+    q = len(order_matrix)
+    
+    if len(start_times) != n:
+        raise ValueError(f"start_times deve ter tamanho {n}")
 
     finish_times = [start_times[i] + instance.processing_times[i] for i in range(n)]
     violations: List[str] = []
+
+    # Build task_crane from order_matrix for safety margin checks
+    task_crane = [0] * n
+    for crane_idx, row in enumerate(order_matrix, start=1):
+        for task_id in row:
+            if task_id != 0:
+                task_crane[task_id - 1] = crane_idx
 
     # Precedence
     for i, j in instance.precedence:
@@ -96,20 +106,19 @@ def evaluate_schedule(
         if overlap:
             violations.append(f"nonsimultaneous {i},{j} se sobrepoe")
 
-    # Travel and ready per crane
-    tasks_by_crane: List[List[int]] = [[] for _ in range(q)]
-    for idx, crane in enumerate(task_crane):
-        tasks_by_crane[crane - 1].append(idx)
-    for crane_idx, tasks in enumerate(tasks_by_crane):
-        tasks.sort(key=lambda t: start_times[t])
-        last_finish = instance.cranes_ready[crane_idx]
+    # Travel and ready per crane (usa ordem da matriz diretamente)
+    for crane_idx, row in enumerate(order_matrix):
+        last_finish = float(instance.cranes_ready[crane_idx])
         last_pos = instance.cranes_init_pos[crane_idx]
-        for t_idx in tasks:
+        for task_id in row:
+            if task_id == 0:
+                continue
+            t_idx = task_id - 1
             move_time = instance.travel_time * abs(instance.task_bays[t_idx] - last_pos)
             earliest = last_finish + move_time
-            if start_times[t_idx] < earliest:
+            if start_times[t_idx] < earliest - 1e-9:  # pequena tolerância numérica
                 violations.append(
-                    f"guindaste {crane_idx+1} tarefa {t_idx+1} inicia {start_times[t_idx]} < pronto {earliest}"
+                    f"guindaste {crane_idx+1} tarefa {task_id} inicia {start_times[t_idx]} < pronto {earliest}"
                 )
             last_finish = finish_times[t_idx]
             last_pos = instance.task_bays[t_idx]
@@ -128,7 +137,7 @@ def evaluate_schedule(
                     f"safety margin violada entre {i+1} e {j+1}: bays {instance.task_bays[i]} vs {instance.task_bays[j]}"
                 )
 
-    makespan = max(finish_times)
+    makespan = max(finish_times) if finish_times else 0
     return {
         "valid": len(violations) == 0,
         "makespan": makespan,
@@ -136,31 +145,62 @@ def evaluate_schedule(
     }
 
 
-def order_matrix_to_assignment(order_matrix: List[List[int]], n_tasks: int) -> List[int]:
-    """Converte matriz de ordem (q x m) em vetor de alocacao de guindaste por tarefa.
+def compute_start_times_from_order_matrix(
+    instance: QCSPInstance,
+    order_matrix: List[List[int]],
+) -> List[float]:
+    """Calcula tempos de início a partir da matriz de ordem e restrições de precedência.
 
-    Convenção: cada linha representa um guindaste; em cada linha, valores em ordem
-    crescente de execução; use 0 para posições vazias. Retorna task_crane (ids 1..q).
-    Lança erro se uma tarefa aparecer mais de uma vez ou se alguma faltar.
+    Processa cada guindaste em sequência. Para cada tarefa na ordem:
+    - Calcula o tempo de pronto do guindaste (ready time + travel time desde última posição)
+    - Garante que precedências são respeitadas (task_i finaliza antes de task_j iniciar)
+    
+    Valida que todas as tarefas aparecem exatamente uma vez na matriz.
+    Retorna vetor start_times (tamanho n, indexado por id_tarefa - 1).
     """
-
-    q = len(order_matrix)
-    task_crane = [0] * n_tasks
-
+    n = len(instance.processing_times)
+    
+    # Validar matriz: cada tarefa deve aparecer exatamente uma vez
     seen = set()
-    for crane_idx, row in enumerate(order_matrix, start=1):
-        for val in row:
-            if val == 0:
+    for crane_idx, row in enumerate(order_matrix):
+        for task_id in row:
+            if task_id == 0:
                 continue
-            if val < 1 or val > n_tasks:
-                raise ValueError(f"Tarefa fora de faixa na linha {crane_idx}: {val}")
-            if val in seen:
-                raise ValueError(f"Tarefa repetida: {val}")
-            seen.add(val)
-            task_crane[val - 1] = crane_idx
-
-    if len(seen) != n_tasks:
-        missing = [i for i in range(1, n_tasks + 1) if i not in seen]
+            if task_id < 1 or task_id > n:
+                raise ValueError(f"Tarefa fora de faixa na linha {crane_idx}: {task_id}")
+            if task_id in seen:
+                raise ValueError(f"Tarefa repetida na matriz: {task_id}")
+            seen.add(task_id)
+    
+    if len(seen) != n:
+        missing = [i for i in range(1, n + 1) if i not in seen]
         raise ValueError(f"Tarefas ausentes na matriz: {missing}")
-
-    return task_crane
+    
+    # Inicializar start_times com -1 para detectar tarefas não agendadas
+    start_times: List[float] = [-1.0] * n
+    
+    # Processar cada guindaste em sequência
+    for crane_idx, row in enumerate(order_matrix):
+        last_finish = float(instance.cranes_ready[crane_idx])
+        last_pos = instance.cranes_init_pos[crane_idx]
+        
+        for task_id in row:
+            if task_id == 0:
+                continue
+            
+            task_idx = task_id - 1
+            move_time = instance.travel_time * abs(instance.task_bays[task_idx] - last_pos)
+            earliest_from_crane = last_finish + move_time
+            
+            # Garantir que precedências são respeitadas
+            earliest_from_prec = 0.0
+            for pred_id, succ_id in instance.precedence:
+                if succ_id == task_id and start_times[pred_id - 1] >= 0:
+                    pred_finish = start_times[pred_id - 1] + instance.processing_times[pred_id - 1]
+                    earliest_from_prec = max(earliest_from_prec, pred_finish)
+            
+            start_times[task_idx] = max(earliest_from_crane, earliest_from_prec)
+            last_finish = start_times[task_idx] + instance.processing_times[task_idx]
+            last_pos = instance.task_bays[task_idx]
+    
+    return start_times
