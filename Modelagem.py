@@ -59,37 +59,6 @@ def load_instance(path: Path) -> QCSPInstance:
         cranes_init_pos=init_pos,
     )
 
-def decoding_solution(
-    instance: QCSPInstance,
-    result_coding_1: List[int], # vetor de ids de tarefas ordenados pelo start_time
-    result_coding_2: List[int], # vetor de guindastes atribuídos às tarefas
-):
-    """Decodifica a solução representada por dois vetores em uma matriz de ordem por guindaste.
-
-    Args:
-        instance: QCSPInstance com dados do problema
-        result_coding_1: vetor de ids de tarefas ordenados pelo start_time
-        result_coding_2: vetor de guindastes atribuídos às tarefas
-
-    Returns:
-        order_matrix: matriz q x m, linha i = guindaste i, valores = ids de tarefas em ordem
-    """
-    n = len(instance.processing_times)
-    q = len(instance.cranes_ready)
-
-    if len(result_coding_1) != n or len(result_coding_2) != n:
-        raise ValueError(f"result_coding_1 e result_coding_2 devem ter tamanho {n}")
-
-    order_matrix: List[List[int]] = [[] for _ in range(q)]
-
-    for task_idx, task_id in enumerate(result_coding_1):
-        crane_id = result_coding_2[task_idx] - 1
-        print(f"Assigning task {task_id} (idx: {task_idx}) to crane {crane_id + 1}")
-
-        order_matrix[crane_id].append(task_id)
-
-    return order_matrix
-
 def compute_start_times_from_order_matrix(
     instance: QCSPInstance,
     order_matrix: List[List[int]],
@@ -156,6 +125,385 @@ def compute_finish_times(
 ) -> List[float]:
     """Calcula tempos de término a partir dos tempos de início e tempos de processamento."""
     return [start + p for start, p in zip(start_times, instance.processing_times)]
+
+
+def encode_solution(
+    instance: QCSPInstance,
+    order_matrix: List[List[int]],
+    start_times: List[float],
+):
+    """Encodes a solution represented by an order matrix into two vectors.
+
+    Args:
+        instance: QCSPInstance with problem data
+        order_matrix: q x m matrix, row i = crane i, values = task ids in order
+        start_times: list of start times for each task
+    Returns:
+        result_coding_1: vector of task ids ordered by start_time
+        result_coding_2: vector of cranes assigned to each task
+    """
+    n = len(instance.processing_times)
+    q = len(order_matrix)
+    i=0
+
+    result_coding_1: List[int] = []
+    result_coding_2: List[int] = [0] * n  # Initialize with zeros
+
+    # Sort tasks by start_time
+    sorted_indices = sorted(range(n), key=lambda i: start_times[i])
+    result_coding_1 = [i + 1 for i in sorted_indices]
+
+    # result_coding 2 representa qual crane executa aquela task
+    for crane_idx, row in enumerate(order_matrix):
+        for task_idx, task_id in enumerate(result_coding_1):
+            if task_id in row:
+                result_coding_2[task_idx] = crane_idx + 1
+
+
+    return result_coding_1, result_coding_2
+
+
+def decoding_solution(
+    instance: QCSPInstance,
+    result_coding_1: List[int], # vetor de ids de tarefas ordenados pelo start_time
+    result_coding_2: List[int], # vetor de guindastes atribuídos às tarefas
+):
+    """Decodifica a solução representada por dois vetores em uma matriz de ordem por guindaste.
+
+    Args:
+        instance: QCSPInstance com dados do problema
+        result_coding_1: vetor de ids de tarefas ordenados pelo start_time
+        result_coding_2: vetor de guindastes atribuídos às tarefas
+
+    Returns:
+        order_matrix: matriz q x m, linha i = guindaste i, valores = ids de tarefas em ordem
+    """
+    n = len(instance.processing_times)
+    q = len(instance.cranes_ready)
+
+    if len(result_coding_1) != n or len(result_coding_2) != n:
+        raise ValueError(f"result_coding_1 e result_coding_2 devem ter tamanho {n}")
+
+    order_matrix: List[List[int]] = [[] for _ in range(q)]
+
+    for task_idx, task_id in enumerate(result_coding_1):
+        crane_id = result_coding_2[task_idx] - 1
+        print(f"Assigning task {task_id} (idx: {task_idx}) to crane {crane_id + 1}")
+
+        order_matrix[crane_id].append(task_id)
+
+    return order_matrix
+
+
+def generate_position_maps(instance, result_coding_1, result_coding_2):
+    """
+    Generate pos_pre_task_map and pos_during_task_map based on crane movements.
+    
+    Args:
+        instance: QCSP instance with crane initial positions
+        result_coding_1: Task order [task_id, ...]
+        result_coding_2: Crane assignment [crane_id, ...]
+    
+    Returns:
+        pos_pre_task_map: Position before crane moves to task
+        pos_during_task_map: Position while executing task
+    """
+    crane_positions = {i+1: instance.cranes_init_pos[i] for i in range(len(instance.cranes_init_pos))}
+    pos_pre_task_map = []
+    pos_during_task_map = []
+    
+    for i in range(len(result_coding_1)):
+        task_id = result_coding_1[i]
+        crane_id = result_coding_2[i]
+        task_bay = instance.task_bays[task_id - 1]
+        
+        # Position before moving
+        pos_pre_task_map.append(crane_positions[crane_id])
+        
+        # Position during task execution (at task bay)
+        pos_during_task_map.append(task_bay)
+        
+        # Update crane position after task
+        crane_positions[crane_id] = task_bay
+    
+    return pos_pre_task_map, pos_during_task_map
+
+
+# def verify_crane_crossing_and_safety_margins(instance, result_coding_1, result_coding_2, pos_pre_task_map, pos_during_task_map):
+#     crane_positions = {i+1: instance.cranes_init_pos[i] for i in range(len(instance.cranes_init_pos))}
+    
+#     for i in range(len(result_coding_1)): # possível fazer isso pois result_coding_1 está ordenado por start_time
+#         task_id = result_coding_1[i]
+#         crane_id = result_coding_2[i]
+#         pre_pos = pos_pre_task_map[i]
+#         during_pos = pos_during_task_map[i]
+        
+#         # Verificar cruzamento com outros guindastes    
+#         for other_crane_id, other_pos in crane_positions.items():
+#             if other_crane_id != crane_id:
+#                 if (pre_pos < other_pos < during_pos) or (during_pos < other_pos < pre_pos):
+#                     # print(f"Cruze detected between crane {crane_id} and crane {other_crane_id} during task {task_id}")
+#                     print(f"Crossing violation: crane {crane_id} moving from {pre_pos} to {during_pos} crosses crane {other_crane_id} at position {other_pos}")
+#                     print(f"Details: task {task_id}, crane {crane_id} pre_pos {pre_pos}, during_pos {during_pos}, other_crane {other_crane_id}, other_pos {other_pos}")
+#                     return True
+                
+#                 # Verificar margem de segurança
+#                 min_distance = abs(during_pos - other_pos)
+#                 if min_distance <= instance.safety_margin:
+#                     print(f"Safety margin violation: crane {crane_id} at position {during_pos} and crane {other_crane_id} at position {other_pos}, distance {min_distance} < {instance.safety_margin}")
+#                     return True
+        
+#         # Atualizar a posição do guindaste após a tarefa
+#         crane_positions[crane_id] = during_pos
+    
+#     return False
+
+
+
+
+
+def verify_crane_crossing_and_safety_margins_gabs(instance, result_coding_1, result_coding_2, pos_pre_task_map, pos_during_task_map):
+    vet_bay = [0] * instance.bays
+    # tempo_atual = start_times[0]
+    # MÃO ESTÁ CONSEGUINDO MAPEAR MOVIMENTAÇÃO SIMULTANEA DOS GUINDASTES
+
+    for crane_id, crane_pos in enumerate(instance.cranes_init_pos):
+        vet_bay[crane_pos - 1] = crane_id + 1  # Marca a posição inicial dos guindastes
+
+    for i in range(len(result_coding_1)):  # possível fazer isso pois result_coding_1 está ordenado por start_time
+        task_id = result_coding_1[i]
+        crane_id = result_coding_2[i]
+        pre_pos = pos_pre_task_map[i]
+        during_pos = pos_during_task_map[i]
+
+        # Atualizar a posição do guindaste após a tarefa
+        vet_bay[pre_pos] = 0  # Libera a posição anterior
+        vet_bay[during_pos] = crane_id  # Marca a nova posição do guindaste
+
+        # verifico nesse momento se há violação de margem de segurança e de cruzamento
+        # pode ser visto caso tenha guindastes em posições que não respeitem a margem de segurança
+        # e se um guindaste de id menor apareceu a direita de um com id maior e vice-versa
+        for bay_idx in range(instance.bays):
+            if vet_bay[bay_idx] != 0:
+                for other_bay_idx in range(0, instance.bays):
+                    if other_bay_idx != bay_idx:
+                        if vet_bay[other_bay_idx] != 0:
+                            distance = abs(bay_idx - other_bay_idx)
+                            if distance <= instance.safety_margin:
+                                print(f"Safety margin violation: crane {vet_bay[bay_idx]} at bay {bay_idx} and crane {vet_bay[other_bay_idx]} at bay {other_bay_idx}, distance {distance} < {instance.safety_margin}")
+                                return True
+                            if (vet_bay[bay_idx] > vet_bay[other_bay_idx] and bay_idx < other_bay_idx) or (vet_bay[bay_idx] < vet_bay[other_bay_idx] and bay_idx > other_bay_idx):
+                                print(f"Crossing violation: crane {vet_bay[bay_idx]} at bay {bay_idx} crossed crane {vet_bay[other_bay_idx]} at bay {other_bay_idx}")
+                                return True               
+
+def verify_crane_crossing_and_safety_margins(
+    instance, 
+    result_coding_1, 
+    result_coding_2, 
+    pos_pre_task_map, 
+    pos_during_task_map,
+    start_times,  # ADICIONAR
+    finish_times  # ADICIONAR
+):
+    """
+    Verifica cruzamento e violação de margem de segurança considerando sobreposição temporal.
+    
+    Returns:
+        True se houver violação, False caso contrário
+    """
+    n = len(result_coding_1)
+    
+    # Para cada par de tarefas
+    for i in range(n):
+        task_i = result_coding_1[i] - 1
+        crane_i = result_coding_2[i]
+        start_i = start_times[task_i]
+        finish_i = finish_times[task_i]
+        bay_i = pos_during_task_map[i]
+        
+        for j in range(i + 1, n):
+            task_j = result_coding_1[j] - 1
+            crane_j = result_coding_2[j]
+            
+            # Apenas verifica se são guindastes diferentes
+            if crane_i == crane_j:
+                continue
+            
+            start_j = start_times[task_j]
+            finish_j = finish_times[task_j]
+            bay_j = pos_during_task_map[j]
+            
+            # Verifica se há sobreposição temporal
+            overlap = not (finish_i <= start_j or finish_j <= start_i)
+            
+            if overlap:
+                distance = abs(bay_i - bay_j)
+                
+                # Verificar margem de segurança
+                if distance < instance.safety_margin:
+                    print(f"Safety margin violation: crane {crane_i} (task {task_i+1}) at bay {bay_i} "
+                          f"and crane {crane_j} (task {task_j+1}) at bay {bay_j}, "
+                          f"distance {distance} < {instance.safety_margin} "
+                          f"during overlap [{max(start_i, start_j):.1f}, {min(finish_i, finish_j):.1f}]")
+                    return True
+                
+                # Verificar cruzamento durante movimento
+                pre_i = pos_pre_task_map[i]
+                pre_j = pos_pre_task_map[j]
+                
+                # Cruzamento: crane_i vai de pre_i para bay_i e cruza a posição de crane_j
+                if (pre_i < bay_j < bay_i) or (bay_i < bay_j < pre_i):
+                    print(f"Crossing violation: crane {crane_i} moving from {pre_i} to {bay_i} "
+                          f"crosses crane {crane_j} at position {bay_j}")
+                    return True
+    
+    return False
+
+def verify_crane_crossing_and_safety_margins_v2(
+    instance, 
+    result_coding_1, 
+    result_coding_2, 
+    pos_pre_task_map, 
+    pos_during_task_map,
+    start_times,
+    finish_times
+):
+    """
+    Verifica cruzamento e violação de margem de segurança considerando sobreposição temporal.
+    Detecta cruzamentos tanto em posições estáticas quanto durante movimentos simultâneos.
+    
+    Returns:
+        True se houver violação, False caso contrário
+    """
+    n = len(result_coding_1)
+    
+    for i in range(n):
+        task_i = result_coding_1[i] - 1
+        crane_i = result_coding_2[i]
+        start_i = start_times[task_i]
+        finish_i = finish_times[task_i]
+        bay_i = pos_during_task_map[i]
+        pre_i = pos_pre_task_map[i]
+        
+        # Tempo de movimento do crane_i
+        move_time_i = instance.travel_time * abs(bay_i - pre_i)
+        move_start_i = start_i - move_time_i
+        
+        for j in range(i + 1, n):
+            task_j = result_coding_1[j] - 1
+            crane_j = result_coding_2[j]
+            
+            if crane_i == crane_j:
+                continue
+            
+            start_j = start_times[task_j]
+            finish_j = finish_times[task_j]
+            bay_j = pos_during_task_map[j]
+            pre_j = pos_pre_task_map[j]
+            
+            move_time_j = instance.travel_time * abs(bay_j - pre_j)
+            move_start_j = start_j - move_time_j
+            
+            # === 1. VERIFICAR CRUZAMENTO DURANTE MOVIMENTO SIMULTÂNEO ===
+            # Overlap temporal dos movimentos
+            movement_overlap = not (start_i <= move_start_j or start_j <= move_start_i)
+            
+            if movement_overlap:
+                # Crane_i vai de pre_i para bay_i
+                # Crane_j vai de pre_j para bay_j
+                # Cruzamento ocorre se as trajetórias se interceptam
+                
+                # Caso 1: Crane_i cruza a trajetória de crane_j
+                if (pre_i < pre_j < bay_i and pre_i < bay_j < bay_i) or \
+                   (bay_i < pre_j < pre_i and bay_i < bay_j < pre_i):
+                    print(f"Crossing violation during simultaneous movement: "
+                          f"crane {crane_i} ({pre_i}→{bay_i}) crosses crane {crane_j} ({pre_j}→{bay_j})")
+                    # return True
+                
+                # Caso 2: Crane_j cruza a trajetória de crane_i
+                if (pre_j < pre_i < bay_j and pre_j < bay_i < bay_j) or \
+                   (bay_j < pre_i < pre_j and bay_j < bay_i < pre_j):
+                    print(f"Crossing violation during simultaneous movement: "
+                          f"crane {crane_j} ({pre_j}→{bay_j}) crosses crane {crane_i} ({pre_i}→{bay_i})")
+                    # return True
+            
+            # === 2. VERIFICAR CRUZAMENTO: MOVIMENTO vs POSIÇÃO ESTÁTICA ===
+            # Crane_i em movimento cruza crane_j parado
+            if move_start_i < finish_j and start_i > start_j:
+                if (pre_i < bay_j < bay_i) or (bay_i < bay_j < pre_i):
+                    print(f"Crossing violation: crane {crane_i} moving ({pre_i}→{bay_i}) "
+                          f"crosses crane {crane_j} stationary at {bay_j}")
+                    # return True
+            
+            # Crane_j em movimento cruza crane_i parado
+            if move_start_j < finish_i and start_j > start_i:
+                if (pre_j < bay_i < bay_j) or (bay_j < bay_i < pre_j):
+                    print(f"Crossing violation: crane {crane_j} moving ({pre_j}→{bay_j}) "
+                          f"crosses crane {crane_i} stationary at {bay_i}")
+                    # return True
+            
+            # === 3. VERIFICAR MARGEM DE SEGURANÇA DURANTE EXECUÇÃO ===
+            overlap = not (finish_i <= start_j or finish_j <= start_i)
+            
+            if overlap:
+                distance = abs(bay_i - bay_j)
+                
+                if distance < instance.safety_margin:
+                    print(f"Safety margin violation: crane {crane_i} (task {task_i+1}) at bay {bay_i} "
+                          f"and crane {crane_j} (task {task_j+1}) at bay {bay_j}, "
+                          f"distance {distance} < {instance.safety_margin} "
+                          f"during overlap [{max(start_i, start_j):.1f}, {min(finish_i, finish_j):.1f}]")
+                    # return True
+    
+    return False
+
+def verify_precedence_violations(
+    instance: QCSPInstance,
+    start_times: List[float],
+    finish_times: List[float],
+):
+    """Verifica violações de precedência.
+
+    Args:
+        instance: QCSPInstance com dados do problema
+        start_times: tempos de início (tamanho n)
+        finish_times: tempos de término (tamanho n)
+
+    Returns:
+        Lista de strings descrevendo violações encontradas.
+    """
+    violations: List[str] = []
+
+    for i, j in instance.precedence:
+        if finish_times[i - 1] > start_times[j - 1]:
+            violations.append(f"precedence {i}->{j} violada: fim {finish_times[i-1]} > inicio {start_times[j-1]}")
+
+    return violations
+
+def verify_nonsimultaneous_violations(
+    instance: QCSPInstance,
+    start_times: List[float],
+    finish_times: List[float],
+):
+    """Verifica violações de não simultaneidade.
+
+    Args:
+        instance: QCSPInstance com dados do problema
+        start_times: tempos de início (tamanho n)
+        finish_times: tempos de término (tamanho n)
+
+    Returns:
+        Lista de strings descrevendo violações encontradas.
+    """
+    violations: List[str] = []
+
+    for i, j in instance.nonsimultaneous:
+        overlap = not (finish_times[i - 1] <= start_times[j - 1] or finish_times[j - 1] <= start_times[i - 1])
+
+        if overlap:
+            violations.append(f"nonsimultaneous {i},{j} se sobrepoe")
+
+    return violations
 
 def evaluate_schedule(
     instance: QCSPInstance,
