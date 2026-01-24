@@ -53,19 +53,19 @@ print()
 # else:
 #     print("No crane crossing detected (method 1). Solution is valid.\n")
 
-crossing_detected2 = verify_crane_crossing_and_safety_margins_v2(instance, codificado1, codificado2, pos_pre_task_map, pos_during_task_map, start_times, compute_finish_times(instance, start_times))
+crossing_detected2 = verify_crane_crossing_and_safety_margins_v2(instance, codificado1, codificado2, pos_pre_task_map, pos_during_task_map, start_times1, compute_finish_times(instance, start_times1))
 if crossing_detected2:
     print("Invalid solution due to crane crossing (method 2).\n")
 else:
     print("No crane crossing detected (method 2). Solution is valid.\n")
 
-precedence_breaks_detected = verify_precedence_constraints(instance, resultado, start_times)
+precedence_breaks_detected = verify_precedence_violations(instance, resultado1, start_times1)
 if precedence_breaks_detected:
     print("Invalid solution due to precedence constraint violations.\n")
 else:
     print("No precedence constraint violations detected. Solution is valid.\n")
 
-simultaneous_tasks_detected = verify_simultaneous_tasks_constraints(instance, resultado, start_times)
+simultaneous_tasks_detected = verify_nonsimultaneous_violations(instance, resultado1, start_times1)
 if simultaneous_tasks_detected:
     print("Invalid solution due to simultaneous tasks constraint violations.\n")
 else:

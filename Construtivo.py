@@ -7,7 +7,10 @@ from Modelagem import QCSPInstance
 # Utilitários
 # ------------------------------------------------------------
 def _build_predecessor_map(instance: QCSPInstance) -> List[Set[int]]:
-    """Mapa de predecessores 0-based para cada tarefa."""
+    """
+    Mapa de predecessores 0-based para cada tarefa.
+    Retorna uma lista onde o índice é a tarefa (0-based) e o valor é um conjunto de predecessores (0-based).
+    """
     n = len(instance.processing_times)
     preds: List[Set[int]] = [set() for _ in range(n)]
     for a, b in instance.precedence:
@@ -79,74 +82,136 @@ def _earliest_feasible_start(
     - precedência
     - pares não simultâneos
     - margem de segurança entre guindastes
-    - cruzamento entre guindastes durante deslocamentos
+    - cruzamento entre guindastes durante deslocamentos (paralelismo permitido se sem cruzamentos)
     Retorna (start, finish).
     """
-    proc = instance.processing_times[task]
-    bay = instance.task_bays[task]
+    # ============================================
+    # FASE 1: INICIALIZAÇÃO E PARÂMETROS
+    # ============================================
+    proc = instance.processing_times[task]  # tempo de processamento da tarefa
+    bay = instance.task_bays[task]  # baía (posição) onde a tarefa será executada
+    
+    print(f"\n{'='*80}")
+    print(f"[EFS] Calculando earliest feasible start para Task={task+1}, Crane={crane+1}")
+    print(f"  Processing Time: {proc}, Task Bay: {bay}")
 
-    # disponibilidade do guindaste (ready + deslocamento a partir do último job)
+    # ============================================
+    # FASE 2: DISPONIBILIDADE DO GUINDASTE (Ready Time + Travel)
+    # ============================================
+    # Obtém o último job alocado ao guindaste ou sua posição inicial
     last_finish, last_bay = _last_state_of_crane(crane, scheduled, instance)
-    start = last_finish + instance.travel_time * abs(bay - last_bay)
+    
+    # Calcula tempo de deslocamento da última posição até a nova baía
+    travel_distance = abs(bay - last_bay)
+    travel_time_needed = instance.travel_time * travel_distance
+    start = last_finish + travel_time_needed
+    
+    print(f"\n[Fase 2] Disponibilidade do Guindaste:")
+    print(f"  Last finish time: {last_finish:.2f}, Last bay: {last_bay}")
+    print(f"  Travel distance: {travel_distance} bays, Travel time: {travel_time_needed:.2f}")
+    print(f"  → Initial start (sem restrições): {start:.2f}")
 
-    # garante precedência: start >= fim de todos os predecessores
+    # ============================================
+    # FASE 3: VERIFICAÇÃO DE PRECEDÊNCIA INICIAL
+    # ============================================
+    # Garante que a tarefa só inicia após todos seus predecessores terminarem
+    print(f"\n[Fase 3] Restrições de Precedência:")
+    if preds[task]:
+        print(f"  Predecessores da tarefa {task+1}: {[p+1 for p in preds[task]]}")
+        for p in preds[task]:
+            if p in scheduled:
+                pred_finish = scheduled[p][2]
+                if pred_finish > start:
+                    print(f"    → Task {p+1} termina em {pred_finish:.2f} (maior que start={start:.2f})")
+                    start = max(start, pred_finish)
+                else:
+                    print(f"    → Task {p+1} termina em {pred_finish:.2f} (compatível com start={start:.2f})")
+    else:
+        print(f"  Nenhum predecessor para a tarefa {task+1}")
+    print(f"  → Start após precedência: {start:.2f}")
+
+    # ============================================
+    # FASE 4: AJUSTES SEQUENCIAIS (sem loop) para conflitos
+    # ============================================
+    print(f"\n[Fase 4] Verificação de Conflitos:")
+    
+    # 4.1: Restrição de Não-Simultaneidade
+    print(f"\n  [4.1] Verificando não-simultaneidade...")
+    for other, (c_o, s_o, f_o) in scheduled.items():
+        if (task + 1, other + 1) in instance.nonsimultaneous or (other + 1, task + 1) in instance.nonsimultaneous:
+            if _overlap(start, start + proc, s_o, f_o):
+                print(f"    CONFLITO: Task {task+1} overlaps Task {other+1} [{s_o:.2f}, {f_o:.2f}]")
+                print(f"    → Ajuste: start = {f_o:.2f} (esperar fim da tarefa conflitante)")
+                start = f_o
+    
+    # 4.2: Restrição de Margem de Segurança Espacial + Paralelismo
+    print(f"\n  [4.2] Verificando margem de segurança espacial...")
+    for other, (c_o, s_o, f_o) in scheduled.items():
+        if c_o != crane:  # Outro guindaste
+            distance_to_other = abs(bay - instance.task_bays[other])
+            if distance_to_other < instance.safety_margin:
+                # Apenas conflita se as EXECUÇÕES se sobrepõem temporalmente
+                if _overlap(start, start + proc, s_o, f_o):
+                    print(f"    CONFLITO: Task {task+1} (bay {bay}) próximo a Task {other+1} (bay {instance.task_bays[other]})")
+                    print(f"    Distância: {distance_to_other} < Margem: {instance.safety_margin}")
+                    print(f"    → Ajuste: start = {f_o:.2f}")
+                    start = f_o
+    
+    # 4.3: Restrição de Cruzamento durante Movimentações
+    print(f"\n  [4.3] Verificando cruzamentos durante movimentações...")
+    pre_bay = last_bay
+    move_start = start - instance.travel_time * abs(bay - pre_bay)
+    
+    for other, (c_o, s_o, f_o) in scheduled.items():
+        if c_o != crane:  # Outro guindaste
+            other_bay = instance.task_bays[other]
+            other_pre_bay = _pre_bay_for_task(other, c_o, scheduled, instance)
+            other_move_start = s_o - instance.travel_time * abs(other_bay - other_pre_bay)
+            
+            # Tipo 1: Minha movimentação (move_start, start) vs posição estática do outro durante sua execução
+            if _overlap(move_start, start, s_o, f_o):
+                if _segment_crosses_point(pre_bay, bay, other_bay):
+                    print(f"    CRUZAMENTO 1: Meu deslocamento [{pre_bay}→{bay}] durante [{move_start:.2f},{start:.2f}]")
+                    print(f"      cruza Task {other+1} em bay {other_bay} durante execução [{s_o:.2f},{f_o:.2f}]")
+                    print(f"      → Ajuste: start = {f_o:.2f} (esperar fim da tarefa no cruzamento)")
+                    start = f_o
+            
+            # Tipo 2: Deslocamentos SIMULTÂNEOS - cruzamento perigoso
+            elif _overlap(move_start, start, other_move_start, s_o):
+                if _segments_cross(pre_bay, bay, other_pre_bay, other_bay):
+                    print(f"    CRUZAMENTO 2: Deslocamentos simultâneos perigosos!")
+                    print(f"      Eu: [{pre_bay}→{bay}] durante [{move_start:.2f},{start:.2f}]")
+                    print(f"      Outro: [{other_pre_bay}→{other_bay}] durante [{other_move_start:.2f},{s_o:.2f}]")
+                    print(f"      → Ajuste: start = {max(start, s_o):.2f} (sequencializar movimentações)")
+                    start = max(start, s_o)
+            
+            # Tipo 3: Movimentação do outro durante minha execução - risco de cruzamento
+            elif _overlap(other_move_start, s_o, start, start + proc):
+                if _segment_crosses_point(other_pre_bay, other_bay, bay):
+                    print(f"    CRUZAMENTO 3: Task {other+1} se desloca [{other_pre_bay}→{other_bay}] durante [{other_move_start:.2f},{s_o:.2f}]")
+                    print(f"      cruza minha posição bay {bay} durante minha execução [{start:.2f},{start+proc:.2f}]")
+                    print(f"      → Ajuste: start = {max(start, s_o):.2f} (sequencializar movimentações)")
+                    start = max(start, s_o)
+
+    # 4.4: Re-validar precedência após todos os ajustes
+    print(f"\n  [4.4] Re-validando precedência após ajustes...")
     for p in preds[task]:
         if p in scheduled:
-            start = max(start, scheduled[p][2])
+            pred_finish = scheduled[p][2]
+            if start < pred_finish:
+                print(f"    PRECEDÊNCIA: Predecessor Task {p+1} termina em {pred_finish:.2f} > start {start:.2f}")
+                print(f"    → Ajuste: start = {pred_finish:.2f}")
+                start = pred_finish
 
-    # ajusta para não-simultâneos, margem de segurança e cruzamentos
-    changed = True
-    while changed:
-        changed = False
-        for other, (c_o, s_o, f_o) in scheduled.items():
-            # não simultâneo
-            if (task + 1, other + 1) in instance.nonsimultaneous or (other + 1, task + 1) in instance.nonsimultaneous:
-                if _overlap(start, start + proc, s_o, f_o):
-                    start = f_o
-                    changed = True
-                    continue
-
-            # margem de segurança com outros guindastes
-            if c_o != crane:
-                if _overlap(start, start + proc, s_o, f_o):
-                    if abs(bay - instance.task_bays[other]) < instance.safety_margin:
-                        start = f_o
-                        changed = True
-                        continue
-
-                # cruzamento: meu deslocamento vs posição estática do outro
-                pre_bay = last_bay
-                move_start = start - instance.travel_time * abs(bay - pre_bay)
-                if _overlap(move_start, start, s_o, f_o):
-                    other_bay = instance.task_bays[other]
-                    if _segment_crosses_point(pre_bay, bay, other_bay):
-                        start = f_o
-                        changed = True
-                        continue
-
-                # cruzamento: deslocamento simultâneo entre guindastes
-                other_pre_bay = _pre_bay_for_task(other, c_o, scheduled, instance)
-                other_move_start = s_o - instance.travel_time * abs(instance.task_bays[other] - other_pre_bay)
-                if _overlap(move_start, start, other_move_start, s_o):
-                    if _segments_cross(pre_bay, bay, other_pre_bay, instance.task_bays[other]):
-                        start = max(start, s_o)
-                        changed = True
-                        continue
-
-                # cruzamento: deslocamento do outro vs minha posição estática
-                if _overlap(other_move_start, s_o, start, start + proc):
-                    if _segment_crosses_point(other_pre_bay, instance.task_bays[other], bay):
-                        start = max(start, s_o)
-                        changed = True
-                        continue
-
-        # precedência pode ter sido impactada após empurrar
-        for p in preds[task]:
-            if p in scheduled and start < scheduled[p][2]:
-                start = scheduled[p][2]
-                changed = True
-
+    # ============================================
+    # FASE 5: RESULTADO FINAL
+    # ============================================
     finish = start + proc
+    print(f"\n[Fase 5] RESULTADO FINAL:")
+    print(f"  Task {task+1} no Crane {crane+1}:")
+    print(f"    Start: {start:.2f}, Finish: {finish:.2f}, Duration: {proc}")
+    print(f"{'='*80}\n")
+    
     return start, finish
 
 
@@ -234,22 +299,6 @@ def _to_result_matrix(
 # ------------------------------------------------------------
 # Métodos construtivos
 # ------------------------------------------------------------
-def constructive_est(instance: QCSPInstance):
-    """
-    Heurística Gulosa por Earliest Start Time (EST).
-    Em cada iteração escolhe (tarefa, guindaste) com menor início viável.
-    """
-    return _serial_schedule(instance, priority="est")
-
-
-def constructive_eft(instance: QCSPInstance):
-    """
-    Heurística Gulosa por Earliest Finish Time (EFT).
-    Em cada iteração escolhe (tarefa, guindaste) com menor término viável.
-    """
-    return _serial_schedule(instance, priority="eft")
-
-
 def constructive_precedence_first(instance: QCSPInstance):
     """
     Estratégia em duas fases:
@@ -286,6 +335,26 @@ def constructive_precedence_first(instance: QCSPInstance):
     return start_times, task_crane
 
 
+# **********************************************************************
+
+def constructive_est(instance: QCSPInstance):
+    """
+    Heurística Gulosa por Earliest Start Time (EST).
+    Em cada iteração escolhe (tarefa, guindaste) com menor início viável.
+    """
+    return _serial_schedule(instance, priority="est")
+
+
+def constructive_eft(instance: QCSPInstance):
+    """
+    Heurística Gulosa por Earliest Finish Time (EFT).
+    Em cada iteração escolhe (tarefa, guindaste) com menor término viável.
+    """
+    return _serial_schedule(instance, priority="eft")
+
+
+# **********************************************************************
+
 def _constructive_matrix_based(
     instance: QCSPInstance,
     criterion: str = "est",  # "est" or "eft"
@@ -301,46 +370,100 @@ def _constructive_matrix_based(
     Respeita precedência, não-simultaneidade, margem de segurança e cruzamentos
     via _earliest_feasible_start().
     """
-    n = len(instance.processing_times)
-    q = len(instance.cranes_ready)
-    preds = _build_predecessor_map(instance)
-
-    scheduled: Dict[int, Tuple[int, float, float]] = {}
-    remaining: Set[int] = set(range(n))
-
+    # ============================================
+    # ETAPA 1: INICIALIZAÇÃO
+    # ============================================
+    # Extrai informações básicas da instância
+    n = len(instance.processing_times)  # número total de tarefas
+    q = len(instance.cranes_ready)  # número de guindastes disponíveis
+    
+    # Constrói mapa de precedências
+    preds = _build_predecessor_map(instance)  # preds[t] = conjunto de predecessores da tarefa t
+    
+    # Estado de controle principal:
+    scheduled: Dict[int, Tuple[int, float, float]] = {}  # Dict[task_id] = (crane_id, start_time, finish_time)
+    remaining: Set[int] = set(range(n))  # Conjunto de tarefas ainda não agendadas
+    
+    # ============================================
+    # ETAPA 2: LOOP ITERATIVO DE CONSTRUÇÃO
+    # ============================================
     while remaining:
-        # tarefas elegíveis (predecessores já agendados)
+        # SUBESTAPA 2.1: Identificar tarefas elegíveis
+        # Uma tarefa é elegível se todos os seus predecessores já foram agendados
         eligible = [t for t in remaining if all(p in scheduled for p in preds[t])]
+        
         if not eligible:
+            # Nenhuma tarefa elegível encontrada → possível ciclo ou precedência incompleta
+            print(f"[AVISO] Nenhuma tarefa elegível encontrada. Tarefas restantes: {remaining}")
             break
 
-        # matriz q x n (None para tasks já agendadas ou não elegíveis)
+        # SUBESTAPA 2.2: Construir matriz de critério (q x n)
+        # Cada célula [c][t] armazena EST ou EFT para alocar tarefa t ao guindaste c
+        # Cells não preenchidas permanecem None
         matrix: List[List[Optional[float]]] = [[None for _ in range(n)] for _ in range(q)]
+        
+        # Rastreador para melhor alocação encontrada nesta iteração
+        best = None  # Tupla: (criterion_value, start, finish, task, crane)
 
-        best = None  # (criterion_value, start, finish, task, crane)
+        print(f"\n[ITERANDO] Tarefas elegíveis: {eligible}\n")
+
+        # SUBESTAPA 2.3: Calcular valores para todas as combinações (guindaste, tarefa elegível)
         for c in range(q):
             for t in eligible:
+                # Calcular earliest start (s) e earliest finish (f) para tarefa t no guindaste c
+                # Esta função respeita: precedência, não-simultaneidade, margem de segurança, cruzamentos
+                print(f"[CÁLCULO] Calculando para Task {t+1} no Crane {c+1}")
                 s, f = _earliest_feasible_start(instance, t, c, scheduled, preds)
+                print(f"[RESULTADO] Task {t+1} no Crane {c+1}: start={s:.2f}, finish={f:.2f}")
+                
+                # Aplicar o critério de seleção (EST = start time, EFT = finish time)
                 value = s if criterion == "est" else f
+                
+                # Armazenar na matriz
                 matrix[c][t] = value
-
+                
+                # SUBESTAPA 2.4: Atualizar melhor candidato
+                # Critério de escolha: menor value
+                # Em caso de empate: preferir menor finish time (f) como desempate
                 if best is None or value < best[0] or (abs(value - best[0]) < 1e-9 and f < best[2]):
                     best = (value, s, f, t, c)
 
+        # SUBESTAPA 2.5: Verificar se encontrou alguma alocação válida
         if best is None:
+            print(f"[AVISO] Nenhuma alocação válida encontrada. Tarefas restantes: {remaining}")
             break
 
+        # ============================================
+        # ETAPA 3: ATUALIZAR ESTADO DA CONSTRUÇÃO
+        # ============================================
+        # Desempacotar melhor solução encontrada
         _, s_sel, f_sel, t_sel, c_sel = best
+        
+        # Adicionar tarefa ao agendamento
         scheduled[t_sel] = (c_sel, s_sel, f_sel)
+        
+        # Remover tarefa do conjunto de pendentes
         remaining.remove(t_sel)
+        
+        # [DEBUG] Imprimir progresso da iteração
+        print(f"\n[ITERAÇÃO] Task {t_sel+1} alocada ao Crane {c_sel+1}: start={s_sel:.2f}, finish={f_sel:.2f}\n")
 
-    # monta vetores de saída
-    start_times = [0.0] * n
-    task_crane = [1] * n  # ids 1..q
+    # ============================================
+    # ETAPA 4: FORMATAR RESULTADO
+    # ============================================
+    # Inicializar vetores de saída
+    start_times = [0.0] * n  # Tempo de início para cada tarefa
+    task_crane = [1] * n  # Guindaste alocado para cada tarefa (1-based)
+    
+    # Preencher vetores a partir do dicionário agendado
     for t, (c, s, _f) in scheduled.items():
-        start_times[t] = s
-        task_crane[t] = c + 1  # volta para 1-based
+        start_times[t] = s  # Tempo de início (0-based)
+        task_crane[t] = c + 1  # ID do guindaste (converter para 1-based)
 
+    # ============================================
+    # ETAPA 5: CONVERTER PARA FORMATO DE RESULTADO
+    # ============================================
+    # Gerar matriz de resultado no formato esperado (lista de tarefas por guindaste)
     return start_times, _to_result_matrix(instance, start_times, task_crane)
 
 
