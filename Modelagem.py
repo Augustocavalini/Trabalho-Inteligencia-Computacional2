@@ -210,7 +210,7 @@ def decoding_solution(
 
     for task_idx, task_id in enumerate(result_coding_1):
         crane_id = result_coding_2[task_idx] - 1
-        print(f"Assigning task {task_id} (idx: {task_idx}) to crane {crane_id + 1}")
+        # print(f"Assigning task {task_id} (idx: {task_idx}) to crane {crane_id + 1}")
 
         order_matrix[crane_id].append(task_id)
 
@@ -496,7 +496,7 @@ def evaluate_schedule(
     max_makespan = max(finish_times) if finish_times else 0.0
     total_completion = sum(finish_times)
 
-    valuated_report = alpha_1 * max_makespan + alpha_2 * total_completion
+    cost_function = alpha_1 * max_makespan + alpha_2 * total_completion
 
     precedence_violations = verify_precedence_violations(instance, start_times, finish_times)
     nonsimultaneous_violations = verify_nonsimultaneous_violations(instance, start_times, finish_times)
@@ -505,7 +505,8 @@ def evaluate_schedule(
     )
 
     report = {
-        "makespan": valuated_report,
+        "cost_function": cost_function,
+        "max_makespan": max_makespan,
         "total_completion": total_completion,
         "precedence_violations": precedence_violations,
         "nonsimultaneous_violations": nonsimultaneous_violations,
@@ -513,3 +514,28 @@ def evaluate_schedule(
     }
 
     return report
+
+
+def cost_function(finish_times, alpha_1, alpha_2) -> float:
+    """Calcula o makespan de um agendamento."""
+
+    max_makespan = max(finish_times) if finish_times else 0.0
+    total_completion = sum(finish_times)
+
+    cost_function = alpha_1 * max_makespan + alpha_2 * total_completion
+    return cost_function
+
+
+def feasible(instance: QCSPInstance, encoded1: List[int], encoded2: List[int]) -> bool:
+    """Verifica se um agendamento é viável (sem violações)."""
+
+    start_times = compute_start_times(instance, encoded1, encoded2)
+    finish_times = compute_finish_times(instance, start_times)
+
+    precedence_violations = verify_precedence_violations(instance, start_times, finish_times)
+    nonsimultaneous_violations = verify_nonsimultaneous_violations(instance, start_times, finish_times)
+    crossing_violations = verify_crane_crossing_and_safety_margins_v2(
+        instance, encoded1, encoded2, start_times, finish_times
+    )
+
+    return not (precedence_violations or nonsimultaneous_violations or crossing_violations), start_times, finish_times
