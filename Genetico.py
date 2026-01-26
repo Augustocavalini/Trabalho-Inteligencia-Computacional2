@@ -160,18 +160,29 @@ def genetic_algorithm_encoded(
 	"""
 	rng = random.Random(seed)
 
+	n = len(instance.processing_times)
+	q = len(instance.cranes_ready)
+
+	def _random_encoded() -> Encoded:
+		order = list(range(1, n + 1))
+		rng.shuffle(order)
+		cranes = [rng.randint(1, q) for _ in range(n)]
+		return order, cranes
+
 	if debug:
 		print(
 			f"[GA] start | pop={pop_size} generations={generations} crossover={crossover_rate} mutation={mutation_rate}"
 		)
 
 	# Inicialização
-	# criar população inicial com construtivo guloso randomizado, usando alpha alto para mais diversidade
+	# 3 soluções via construtivo + restante aleatório
 	print("Gerando população inicial...")
+	constructive_count = min(3, pop_size)
 	population: List[Encoded] = [
-		constructive_randomized_greedy(instance, alpha=0.8, criterion="eft", debug=debug)
-		for _ in range(pop_size)
+		constructive_randomized_greedy(instance, alpha=0.2, criterion="eft", debug=debug)
+		for _ in range(constructive_count)
 	]
+	population.extend(_random_encoded() for _ in range(pop_size - constructive_count))
 	if debug:
 		print("[GA] initial population generated")
 

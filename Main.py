@@ -8,6 +8,7 @@ from Modelagem import *
 from Construtivo import *
 from BuscaLocal import guided_local_search_encoded
 from Genetico import genetic_algorithm_encoded
+from Visualization import plot_gantt_by_bay
 
 # Load all QCSP instances
 instances_dir = Path("instances")
@@ -111,6 +112,14 @@ for instance in instances:
     custo = result["cost_function"]
     print(f"Cost after GLS: {custo}")
 
+    plot_gantt_by_bay(
+        instance,
+        res_encoded1_GLS,
+        res_encoded2_GLS,
+        title=f"Gantt GLS - {instance.name}",
+        save_path=Path("results") / f"gantt_{instance.name}_GLS.png",
+    )
+
 
     ga_start = time.perf_counter()
     res_encoded1_GA, res_encoded2_GA = genetic_algorithm_encoded(instance, debug=debug)
@@ -130,6 +139,14 @@ for instance in instances:
     result = evaluate_schedule(instance, encoded1=res_encoded1_GA, encoded2=res_encoded2_GA)
     custo = result["cost_function"]
     print(f"Cost after GA: {custo}")
+
+    plot_gantt_by_bay(
+        instance,
+        res_encoded1_GA,
+        res_encoded2_GA,
+        title=f"Gantt GA - {instance.name}",
+        save_path=Path("results") / f"gantt_{instance.name}_GA.png",
+    )
 
     results.append(
         {
