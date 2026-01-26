@@ -14,6 +14,7 @@ class QCSPInstance:
     nonsimultaneous: Set[Tuple[int, int]]
     cranes_ready: List[int]
     cranes_init_pos: List[int]
+    name: str = ""
 
 
 def load_instance(path: Path) -> QCSPInstance:
@@ -46,6 +47,7 @@ def load_instance(path: Path) -> QCSPInstance:
         raise ValueError("Tamanho de tarefas inconsistente com n")
     if len(ready_times) != q or len(init_pos) != q:
         raise ValueError("Tamanho de guindastes inconsistente com q")
+    name = path.stem
 
     return QCSPInstance(
         processing_times=processing,
@@ -57,6 +59,7 @@ def load_instance(path: Path) -> QCSPInstance:
         nonsimultaneous=nonsim,
         cranes_ready=ready_times,
         cranes_init_pos=init_pos,
+        name=name,
     )
     
 def compute_start_times(
@@ -68,6 +71,8 @@ def compute_start_times(
 
     Processa cada tarefa na ordem definida por encoded1. Para cada tarefa:
     - Calcula o tempo de pronto do guindaste (ready time + travel time desde última posição)
+    - Considera espera por bloqueio de movimento (não cruzamento)
+    - Se houver sobreposição com a tarefa anterior em encoded1, força espera até ela terminar
     
     Retorna vetor start_times (tamanho n, indexado por id_tarefa - 1).
     """
@@ -78,8 +83,7 @@ def compute_start_times(
     last_finish = [float(instance.cranes_ready[i]) for i in range(q)]
     last_pos = [float(instance.cranes_init_pos[i]) for i in range(q)]
 
-    start_times: List[float] = [0.0] * n
-
+    start_times: List[float] = [float("inf")] * n
     for task_idx, task_id in enumerate(encoded1):
         task_id = task_id - 1
         crane_id = encoded2[task_idx] - 1
@@ -89,16 +93,97 @@ def compute_start_times(
         
         earliest_from_prec = 0.0
         for pred_id, succ_id in instance.precedence:
-            if succ_id == task_id + 1:
+            if succ_id == task_id + 1 and start_times[pred_id - 1] != float("inf"):
                 pred_finish = start_times[pred_id - 1] + instance.processing_times[pred_id - 1]
                 earliest_from_prec = max(earliest_from_prec, pred_finish)
-                
 
-        start_times[task_id] = max(earliest_from_crane, earliest_from_prec)
+        earliest_from_nonsim = 0.0
+        for i, j in instance.nonsimultaneous:
+            if i == task_id + 1 and start_times[j - 1] != float("inf"):
+                j_finish = start_times[j - 1] + instance.processing_times[j - 1]
+                earliest_from_nonsim = max(earliest_from_nonsim, j_finish)
+            elif j == task_id + 1 and start_times[i - 1] != float("inf"):
+                i_finish = start_times[i - 1] + instance.processing_times[i - 1]
+                earliest_from_nonsim = max(earliest_from_nonsim, i_finish)
+
+        # Espera por bloqueio: se o caminho cruza posição atual de outro guindaste em execução
+        wait_for_block = 0.0
+        origin_pos = float(last_pos[crane_id])
+        target_pos = float(instance.task_bays[task_id])
+        for other_id in range(q):
+            if other_id == crane_id:
+                continue
+            other_pos = float(last_pos[other_id])
+            if (origin_pos <= other_pos <= target_pos) or (origin_pos >= other_pos >= target_pos):
+                wait_for_block = max(wait_for_block, last_finish[other_id])
+
+        start_times[task_id] = max(
+            earliest_from_crane,
+            earliest_from_prec,
+            earliest_from_nonsim,
+            wait_for_block,
+        )
         last_finish[crane_id] = start_times[task_id] + instance.processing_times[task_id]
         last_pos[crane_id] = instance.task_bays[task_id]
 
     return start_times
+
+
+def compute_crane_completion_times(
+    instance: QCSPInstance,
+    encoded1: List[int],
+    encoded2: List[int],
+    start_times: List[float],
+) -> List[float]:
+    """Calcula o tempo de conclusão de cada guindaste (Y_k)."""
+    q = len(instance.cranes_ready)
+    crane_completion = [float(instance.cranes_ready[i]) for i in range(q)]
+    for idx, task_id in enumerate(encoded1):
+        crane_id = encoded2[idx] - 1
+        task_idx = task_id - 1
+        finish = start_times[task_idx] + instance.processing_times[task_idx]
+        if finish > crane_completion[crane_id]:
+            crane_completion[crane_id] = finish
+    return crane_completion
+
+
+# def compute_start_times(
+#     instance: QCSPInstance,
+#     encoded1: List[int], # vetor de ids de tarefas ordenados pelo start_time
+#     encoded2: List[int], # vetor de guindastes atribuídos às tarefas)
+# ) -> List[float]:
+    
+#     """Calcula tempos de início a partir dos vetores codificados.
+
+#     Processa cada tarefa na ordem definida por encoded1. Para cada tarefa:
+#     - Calcula o tempo de pronto do guindaste (ready time + travel time desde última posição)
+#     - Considera espera por bloqueio de movimento (não cruzamento)
+#     - Se houver sobreposição com a tarefa anterior em encoded1, força espera até ela terminar
+    
+#     Retorna vetor start_times (tamanho n, indexado por id_tarefa - 1).
+#     """
+#     n = len(instance.processing_times)
+#     q = len(instance.cranes_ready)
+
+#     # Estado corrente por guindaste
+#     last_finish = [float(instance.cranes_ready[i]) for i in range(q)]
+#     last_pos = [float(instance.cranes_init_pos[i]) for i in range(q)]
+
+#     last_finish_global = 0.0
+#     start_times: List[float] = [float("inf")] * n
+    
+#     #encoded1 [3, 1, 4, 5, 7, 2, 6, 8, 9, 10]
+#     #encoded2 [2, 1, 2, 2, 2, 1, 2, 2, 2, 2]
+    
+#     for task_idx, task_id in enumerate(encoded1):
+#         task_id = task_id - 1
+#         crane_id = encoded2[task_idx] - 1
+
+#         move_time = instance.travel_time * abs(instance.task_bays[task_id] - last_pos[crane_id])
+#         earliest_from_crane = last_finish[crane_id] + move_time
+        # posso ter que esperar outro crane liberar minha movimentação para ir para o local da tarefa
+
+    
 
 def compute_start_times_from_order_matrix(
     instance: QCSPInstance,
@@ -463,6 +548,58 @@ def verify_nonsimultaneous_violations(
 
     return violations
 
+
+def verify_interference_order_violations(
+    instance: QCSPInstance,
+    encoded1: List[int],
+    encoded2: List[int],
+    start_times: List[float],
+    finish_times: List[float],
+):
+    """Verifica a restrição de interferência (Eq. 11) por ordenação de guindastes.
+
+    Para tarefas simultâneas i e j com l_i < l_j, o guindaste que atende i
+    deve estar à esquerda (ordem) do guindaste que atende j.
+    """
+    n = len(instance.processing_times)
+
+    # mapeia tarefa -> guindaste
+    task_crane = [-1] * n
+    for idx, task_id in enumerate(encoded1):
+        task_crane[task_id - 1] = encoded2[idx]
+
+    # define ordem dos guindastes por posição inicial
+    crane_positions = [(instance.cranes_init_pos[k], k + 1) for k in range(len(instance.cranes_ready))]
+    crane_positions.sort(key=lambda x: (x[0], x[1]))
+    crane_rank = {crane_id: rank for rank, (_pos, crane_id) in enumerate(crane_positions)}
+
+    violations: List[str] = []
+    for i in range(n):
+        for j in range(n):
+            if i == j:
+                continue
+
+            li = instance.task_bays[i]
+            lj = instance.task_bays[j]
+            if li >= lj:
+                continue
+
+            overlap = not (finish_times[i] <= start_times[j] or finish_times[j] <= start_times[i])
+            if not overlap:
+                continue
+
+            ci = task_crane[i]
+            cj = task_crane[j]
+            if ci == -1 or cj == -1:
+                continue
+
+            if crane_rank[ci] > crane_rank[cj]:
+                violations.append(
+                    f"interference order: task {i+1} (bay {li}) and task {j+1} (bay {lj}) overlap with crane {ci} right of crane {cj}"
+                )
+
+    return violations
+
 def evaluate_schedule(
     instance: QCSPInstance,
     alpha_1: float = 1.0,
@@ -488,18 +625,25 @@ def evaluate_schedule(
         order_matrix = decoding_solution(instance, encoded1, encoded2)
         
     if encoded1 is None or encoded2 is None:
-        encoded1, encoded2 = encode_solution(instance, order_matrix, compute_start_times_from_order_matrix(instance, order_matrix))
+        encoded1, encoded2 = encode_solution(
+            instance, order_matrix, compute_start_times_from_order_matrix(instance, order_matrix)
+        )
 
-    start_times = compute_start_times_from_order_matrix(instance, order_matrix)
+    start_times = compute_start_times(instance, encoded1, encoded2)
     finish_times = compute_finish_times(instance, start_times)
 
-    max_makespan = max(finish_times) if finish_times else 0.0
-    total_completion = sum(finish_times)
+    crane_completion = compute_crane_completion_times(instance, encoded1, encoded2, start_times)
+
+    max_makespan = max(crane_completion) if crane_completion else 0.0
+    total_completion = sum(crane_completion)
 
     cost_function = alpha_1 * max_makespan + alpha_2 * total_completion
 
     precedence_violations = verify_precedence_violations(instance, start_times, finish_times)
     nonsimultaneous_violations = verify_nonsimultaneous_violations(instance, start_times, finish_times)
+    interference_violations = verify_interference_order_violations(
+        instance, encoded1, encoded2, start_times, finish_times
+    )
     crossing_violations = verify_crane_crossing_and_safety_margins_v2(
         instance, encoded1, encoded2, start_times, finish_times
     )
@@ -508,22 +652,32 @@ def evaluate_schedule(
         "cost_function": cost_function,
         "max_makespan": max_makespan,
         "total_completion": total_completion,
+        "crane_completion_times": crane_completion,
         "precedence_violations": precedence_violations,
         "nonsimultaneous_violations": nonsimultaneous_violations,
+        "interference_violations": interference_violations,
         "crossing_violations": crossing_violations,
     }
 
     return report
 
 
-def cost_function(finish_times, alpha_1, alpha_2) -> float:
-    """Calcula o makespan de um agendamento."""
+def cost_function(
+    finish_times,
+    alpha_1,
+    alpha_2,
+    crane_completion_times: List[float] = None,
+) -> float:
+    """Calcula a função objetivo a partir do makespan e da soma dos Y_k."""
 
-    max_makespan = max(finish_times) if finish_times else 0.0
-    total_completion = sum(finish_times)
+    if crane_completion_times is None:
+        max_makespan = max(finish_times) if finish_times else 0.0
+        total_completion = sum(finish_times)
+    else:
+        max_makespan = max(crane_completion_times) if crane_completion_times else 0.0
+        total_completion = sum(crane_completion_times)
 
-    cost_function = alpha_1 * max_makespan + alpha_2 * total_completion
-    return cost_function
+    return alpha_1 * max_makespan + alpha_2 * total_completion
 
 
 def feasible(instance: QCSPInstance, encoded1: List[int], encoded2: List[int]) -> bool:
@@ -534,8 +688,16 @@ def feasible(instance: QCSPInstance, encoded1: List[int], encoded2: List[int]) -
 
     precedence_violations = verify_precedence_violations(instance, start_times, finish_times)
     nonsimultaneous_violations = verify_nonsimultaneous_violations(instance, start_times, finish_times)
+    interference_violations = verify_interference_order_violations(
+        instance, encoded1, encoded2, start_times, finish_times
+    )
     crossing_violations = verify_crane_crossing_and_safety_margins_v2(
         instance, encoded1, encoded2, start_times, finish_times
     )
 
-    return not (precedence_violations or nonsimultaneous_violations or crossing_violations), start_times, finish_times
+    return not (
+        precedence_violations
+        or nonsimultaneous_violations
+        or interference_violations
+        or crossing_violations
+    ), start_times, finish_times

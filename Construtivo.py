@@ -1,13 +1,7 @@
 from typing import List, Tuple, Dict, Set, Optional
 import random
 
-from Modelagem import (
-    QCSPInstance,
-    compute_finish_times,
-    decoding_solution,
-    verify_crane_crossing_and_safety_margins_v2,
-    compute_start_times
-)
+from Modelagem import *
 
 
 # ------------------------------------------------------------
@@ -71,6 +65,9 @@ def constructive_randomized_greedy(
     alpha: float = 0.2,
     seed: Optional[int] = None,
     criterion: str = "eft",
+    debug: bool = False,
+    max_restarts: int = 10,
+    backtrack_steps: int = 2,
 ) -> Tuple[List[int], List[int]]:
     """
     Construtivo guloso randomizado com controle de aleatoriedade (alpha).
@@ -87,58 +84,101 @@ def constructive_randomized_greedy(
     if criterion not in {"est", "eft"}:
         raise ValueError("criterion deve ser 'est' ou 'eft'")
 
-    rng = random.Random(seed)
-
     n = len(instance.processing_times)
     q = len(instance.cranes_ready)
-    encoded1: List[int] = []
-    encoded2: List[int] = []
-    scheduled: Set[int] = set()
 
-    while len(scheduled) < n:
-        eligible = [t for t in range(n) if t not in scheduled]
-        if not eligible:
-            raise ValueError("Nenhuma tarefa elegível encontrada (possível ciclo de precedência).")
+    preds = _build_predecessor_map(instance)
 
-        candidates: List[Tuple[float, int, int, List[int], List[int]]] = []  # (cost, task, crane, e1, e2)
+    def _attempt_build(rng: random.Random) -> Tuple[List[int], List[int]]:
+        encoded1: List[int] = []
+        encoded2: List[int] = []
+        scheduled: Set[int] = set()
+        backtracks_left = backtrack_steps
 
-        for t in eligible:
+        while len(scheduled) < n:
+            eligible = [
+                t for t in range(n)
+                if t not in scheduled and preds[t].issubset(scheduled)
+            ]
+            if not eligible:
+                raise ValueError("Nenhuma tarefa elegível encontrada (possível ciclo de precedência).")
+
+            candidates: List[Tuple[float, int, int, List[int], List[int]]] = []  # (cost, task, crane, e1, e2)
+
             for c in range(q):
-                temp_encoded1 = encoded1 + [t + 1]
-                temp_encoded2 = encoded2 + [c + 1]
+                for t in eligible:
+                    temp_encoded1 = encoded1 + [t + 1]
+                    temp_encoded2 = encoded2 + [c + 1]
 
-                start_times = compute_start_times(instance, temp_encoded1, temp_encoded2)
-                finish_times = compute_finish_times(instance, start_times)
+                    start_times = compute_start_times(instance, temp_encoded1, temp_encoded2)
+                    finish_times = compute_finish_times(instance, start_times)
 
-                crossing_violations = verify_crane_crossing_and_safety_margins_v2(
-                    instance,
-                    temp_encoded1,
-                    temp_encoded2,
-                    start_times,
-                    finish_times,
-                )
-                if crossing_violations:
+                    crossing_violations = verify_crane_crossing_and_safety_margins_v2(
+                        instance,
+                        temp_encoded1,
+                        temp_encoded2,
+                        start_times,
+                        finish_times,
+                    )
+                    if crossing_violations:
+                        continue
+
+                    scheduled_temp = set([t_id - 1 for t_id in temp_encoded1])
+                    if not _partial_precedence_ok(instance, start_times, finish_times, scheduled_temp):
+                        continue
+
+                    nonsimultaneous_violations = verify_nonsimultaneous_violations(
+                        instance, start_times, finish_times
+                    )
+                    if nonsimultaneous_violations:
+                        continue
+
+                    interference_violations = verify_interference_order_violations(
+                        instance, temp_encoded1, temp_encoded2, start_times, finish_times
+                    )
+                    if interference_violations:
+                        continue
+
+                    cost = start_times[t] if criterion == "est" else finish_times[t]
+                    candidates.append((cost, t, c, temp_encoded1, temp_encoded2))
+
+            if not candidates:
+                if backtracks_left > 0 and encoded1:
+                    if debug:
+                        print("[constructive] deadlock, backtracking one step")
+                    encoded1.pop()
+                    encoded2.pop()
+                    scheduled = set([t_id - 1 for t_id in encoded1])
+                    backtracks_left -= 1
                     continue
 
-                cost = start_times[t] if criterion == "est" else finish_times[t]
-                candidates.append((cost, t, c, temp_encoded1, temp_encoded2))
+                raise ValueError("Backtrack impossível: nenhuma escolha anterior para desfazer.")
 
-        if not candidates:
-            raise ValueError("Não foi possível encontrar alocação viável sem cruzamento/margem.")
+            costs = [c[0] for c in candidates]
+            c_min = min(costs)
+            c_max = max(costs)
+            threshold = c_min + alpha * (c_max - c_min)
 
-        costs = [c[0] for c in candidates]
-        c_min = min(costs)
-        c_max = max(costs)
-        threshold = c_min + alpha * (c_max - c_min)
+            rcl = [cand for cand in candidates if cand[0] <= threshold]
+            _cost, _t_sel, _c_sel, e1_sel, e2_sel = rng.choice(rcl)
 
-        rcl = [cand for cand in candidates if cand[0] <= threshold]
-        cost, t_sel, c_sel, e1_sel, e2_sel = rng.choice(rcl)
+            encoded1 = e1_sel
+            encoded2 = e2_sel
+            scheduled = set([t_id - 1 for t_id in encoded1])
 
-        encoded1 = e1_sel
-        encoded2 = e2_sel
-        scheduled = set([t_id - 1 for t_id in encoded1])
+        return encoded1, encoded2
 
-    return encoded1, encoded2
+    for attempt in range(max_restarts + 1):
+        attempt_seed = seed if attempt == 0 else (seed if seed is not None else 0) + attempt + 1
+        rng = random.Random(attempt_seed)
+        try:
+            return _attempt_build(rng)
+        except ValueError:
+            if debug:
+                print(f"[constructive] restart {attempt + 1}/{max_restarts}")
+            continue
+
+    raise ValueError("Construtivo falhou após múltiplas tentativas.")
 
 def constructive_randomized_greedy_order_matrix(
     instance: QCSPInstance,

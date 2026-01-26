@@ -4,6 +4,7 @@ import random
 from Modelagem import (
 	QCSPInstance,
 	cost_function,
+	compute_crane_completion_times,
 	feasible
 )
 from Construtivo import constructive_randomized_greedy
@@ -120,6 +121,8 @@ def guided_local_search_encoded(
 	feature_list: Optional[List[Callable[..., List[Feature]]]] = None, # funções de feature
 	debug: bool = False,
 	debug_every: int = 50,
+	repair_if_infeasible: bool = True,
+	allow_infeasible_initial: bool = True,
 ) -> Tuple[List[int], List[int]]:
 	"""
 	Guided Local Search para QCSP usando representação encoded.
@@ -167,11 +170,31 @@ def guided_local_search_encoded(
 	is_feasible, start_times, finish_times = feasible(instance, encoded1, encoded2)
 
 	if not is_feasible:
-		raise ValueError("Solução inicial inválida para GLS.")
+		if repair_if_infeasible:
+			if debug:
+				print("[GLS] initial solution infeasible; trying strict constructive repair")
+			try:
+				encoded1, encoded2 = constructive_randomized_greedy(
+					instance,
+					alpha=alpha,
+					seed=seed,
+					criterion=criterion,
+					debug=debug,
+					allow_infeasible_fallback=False,
+				)
+				is_feasible, start_times, finish_times = feasible(instance, encoded1, encoded2)
+			except Exception:
+				is_feasible = False
+
+		if not is_feasible and not allow_infeasible_initial:
+			raise ValueError("Solução inicial inválida para GLS.")
+		if not is_feasible and debug:
+			print("[GLS] proceeding with infeasible initial solution")
 
 
 	best_e1, best_e2 = _copy_encoded(encoded1, encoded2)
-	best_makespan = cost_function(finish_times, alpha_1_cost, alpha_2_cost)
+	crane_completion = compute_crane_completion_times(instance, best_e1, best_e2, start_times)
+	best_makespan = cost_function(finish_times, alpha_1_cost, alpha_2_cost, crane_completion)
 
     
 	current_e1, current_e2 = _copy_encoded(best_e1, best_e2)
@@ -200,7 +223,8 @@ def guided_local_search_encoded(
 				continue
 
 			# calcula custo real
-			ms = cost_function(finish_times_it, alpha_1_cost, alpha_2_cost)
+			crane_completion_it = compute_crane_completion_times(instance, e1, e2, start_times_it)
+			ms = cost_function(finish_times_it, alpha_1_cost, alpha_2_cost, crane_completion_it)
             
 
 			# calcula somatório das penalidades das features

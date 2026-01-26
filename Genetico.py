@@ -1,10 +1,9 @@
 from typing import List, Tuple, Optional
 import random
 
-from Modelagem import QCSPInstance, feasible, cost_function
+from Modelagem import QCSPInstance, feasible, cost_function, compute_crane_completion_times
 from Construtivo import constructive_randomized_greedy
 
-SEED = 42
 
 
 Encoded = Tuple[List[int], List[int]]
@@ -22,8 +21,9 @@ def _fitness(
 	alpha_2: float,
 	penalty_infeasible: float,
 ) -> float:
-	is_feasible, _start, finish = feasible(instance, encoded1, encoded2)
-	base = cost_function(finish, alpha_1, alpha_2)
+	is_feasible, start_times, finish = feasible(instance, encoded1, encoded2)
+	crane_completion = compute_crane_completion_times(instance, encoded1, encoded2, start_times)
+	base = cost_function(finish, alpha_1, alpha_2, crane_completion)
 	if not is_feasible:
 		return base + penalty_infeasible
 	return base
@@ -145,7 +145,7 @@ def genetic_algorithm_encoded(
 	generations: int = 200,
 	crossover_rate: float = 0.8,
 	mutation_rate: float = 0.2,
-	seed: Optional[int] = SEED,
+	seed: Optional[int] = None,
 	alpha_1: float = 1.0,
 	alpha_2: float = 0.0,
 	penalty_infeasible: float = 1e6,
@@ -167,8 +167,9 @@ def genetic_algorithm_encoded(
 
 	# Inicialização
 	# criar população inicial com construtivo guloso randomizado, usando alpha alto para mais diversidade
+	print("Gerando população inicial...")
 	population: List[Encoded] = [
-		constructive_randomized_greedy(instance, alpha=0.8, seed=SEED)
+		constructive_randomized_greedy(instance, alpha=0.8, criterion="eft", debug=debug)
 		for _ in range(pop_size)
 	]
 	if debug:
@@ -194,8 +195,12 @@ def genetic_algorithm_encoded(
 			p1 = _tournament_select(population, fitnesses, rng) # seleciona o primeiro pai usando seleção por torneio.
 			p2 = _tournament_select(population, fitnesses, rng) # seleciona o segundo pai usando seleção por torneio.
 			
-			while p2 == p1:
-				p2 = _tournament_select(population, fitnesses, rng) # garante que os pais sejam diferentes
+			attempts = 0
+			while p2 == p1 and attempts < 5:
+				if debug:
+					print("[GA][loop] pais iguais, selecionando novamente")
+				p2 = _tournament_select(population, fitnesses, rng)
+				attempts += 1
 
 			# crossover. Pode gera um filho a partir dos dois pais selecionados ou copiar diretamente o pai 1
 			if rng.random() < crossover_rate: # aplica crossover com certa probabilidade
