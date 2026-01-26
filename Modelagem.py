@@ -71,9 +71,10 @@ def compute_start_times(
 
     Processa cada tarefa na ordem definida por encoded1. Para cada tarefa:
     - Calcula o tempo de pronto do guindaste (ready time + travel time desde última posição)
-    - Considera espera por bloqueio de movimento (não cruzamento)
-    - Se houver sobreposição com a tarefa anterior em encoded1, força espera até ela terminar
-    
+    - Considera precedência e não simultaneidade
+    - Verifica tarefas adjacentes (esquerda/direita) em execução por outros guindastes
+    - Considera bloqueio de movimento por guindastes posicionados entre origem e destino
+
     Retorna vetor start_times (tamanho n, indexado por id_tarefa - 1).
     """
     n = len(instance.processing_times)
@@ -84,19 +85,23 @@ def compute_start_times(
     last_pos = [float(instance.cranes_init_pos[i]) for i in range(q)]
 
     start_times: List[float] = [float("inf")] * n
+    task_crane: List[int] = [-1] * n
+
     for task_idx, task_id in enumerate(encoded1):
         task_id = task_id - 1
         crane_id = encoded2[task_idx] - 1
 
         move_time = instance.travel_time * abs(instance.task_bays[task_id] - last_pos[crane_id])
-        earliest_from_crane = last_finish[crane_id] + move_time
-        
+        earliest = last_finish[crane_id] + move_time
+
+        # Precedência
         earliest_from_prec = 0.0
         for pred_id, succ_id in instance.precedence:
             if succ_id == task_id + 1 and start_times[pred_id - 1] != float("inf"):
                 pred_finish = start_times[pred_id - 1] + instance.processing_times[pred_id - 1]
                 earliest_from_prec = max(earliest_from_prec, pred_finish)
 
+        # Não simultaneidade
         earliest_from_nonsim = 0.0
         for i, j in instance.nonsimultaneous:
             if i == task_id + 1 and start_times[j - 1] != float("inf"):
@@ -106,23 +111,50 @@ def compute_start_times(
                 i_finish = start_times[i - 1] + instance.processing_times[i - 1]
                 earliest_from_nonsim = max(earliest_from_nonsim, i_finish)
 
-        # Espera por bloqueio: se o caminho cruza posição atual de outro guindaste em execução
-        wait_for_block = 0.0
+        earliest = max(earliest, earliest_from_prec, earliest_from_nonsim)
+
+        # Esperas por adjacência e bloqueio de movimento
         origin_pos = float(last_pos[crane_id])
         target_pos = float(instance.task_bays[task_id])
-        for other_id in range(q):
-            if other_id == crane_id:
-                continue
-            other_pos = float(last_pos[other_id])
-            if (origin_pos <= other_pos <= target_pos) or (origin_pos >= other_pos >= target_pos):
-                wait_for_block = max(wait_for_block, last_finish[other_id])
+        safety = float(instance.safety_margin)
 
-        start_times[task_id] = max(
-            earliest_from_crane,
-            earliest_from_prec,
-            earliest_from_nonsim,
-            wait_for_block,
-        )
+        while True:
+            wait_until = earliest
+
+            # Adjacent tasks (esquerda/direita) em execução por outros guindastes
+            for other_task in range(n):
+                if other_task == task_id:
+                    continue
+                if start_times[other_task] == float("inf"):
+                    continue
+                if task_crane[other_task] == crane_id + 1:
+                    continue
+
+                bay_dist = abs(instance.task_bays[other_task] - instance.task_bays[task_id])
+                if bay_dist <= safety:
+                    other_start = start_times[other_task]
+                    other_finish = other_start + instance.processing_times[other_task]
+                    if other_start <= earliest < other_finish:
+                        wait_until = max(wait_until, other_finish)
+
+            # Bloqueio por guindastes entre origem e destino
+            for other_id in range(q):
+                if other_id == crane_id:
+                    continue
+                if earliest < last_finish[other_id]:
+                    other_pos = float(last_pos[other_id])
+                    min_pos = min(origin_pos, target_pos) - safety
+                    max_pos = max(origin_pos, target_pos) + safety
+                    if min_pos <= other_pos <= max_pos:
+                        wait_until = max(wait_until, last_finish[other_id])
+
+            if wait_until == earliest:
+                break
+
+            earliest = wait_until
+
+        start_times[task_id] = earliest
+        task_crane[task_id] = crane_id + 1
         last_finish[crane_id] = start_times[task_id] + instance.processing_times[task_id]
         last_pos[crane_id] = instance.task_bays[task_id]
 
@@ -189,43 +221,25 @@ def compute_start_times_from_order_matrix(
     instance: QCSPInstance,
     order_matrix: List[List[int]],
 ) -> List[float]:
-    """Calcula tempos de início a partir da matriz de ordem e restrições de precedência.
+    """Calcula tempos de início a partir da matriz de ordem.
 
-    Processa cada guindaste em sequência. Para cada tarefa na ordem:
-    - Calcula o tempo de pronto do guindaste (ready time + travel time desde última posição)
-    
-    Retorna vetor start_times (tamanho n, indexado por id_tarefa - 1).
+    Converte a matriz de ordem em codificação (encoded1/encoded2) preservando
+    a sequência por guindaste e aplica o mesmo cálculo de start_times.
     """
-    n = len(instance.processing_times)
-    
-    # Inicializar start_times com -1 para detectar tarefas não agendadas
-    start_times: List[float] = [-1.0] * n
-    
-    # Processar cada guindaste em sequência
+    encoded1: List[int] = []
+    encoded2: List[int] = []
+
     for crane_idx, row in enumerate(order_matrix):
-        last_finish = float(instance.cranes_ready[crane_idx])
-        last_pos = instance.cranes_init_pos[crane_idx]
-        
         for task_id in row:
             if task_id == 0:
                 continue
-            
-            task_idx = task_id - 1
-            move_time = instance.travel_time * abs(instance.task_bays[task_idx] - last_pos)
-            earliest_from_crane = last_finish + move_time
-            
-            # Garantir que precedências são respeitadas
-            earliest_from_prec = 0.0
-            for pred_id, succ_id in instance.precedence:
-                if succ_id == task_id and start_times[pred_id - 1] >= 0:
-                    pred_finish = start_times[pred_id - 1] + instance.processing_times[pred_id - 1]
-                    earliest_from_prec = max(earliest_from_prec, pred_finish)
-            
-            start_times[task_idx] = max(earliest_from_crane, earliest_from_prec)
-            last_finish = start_times[task_idx] + instance.processing_times[task_idx]
-            last_pos = instance.task_bays[task_idx]
-    
-    return start_times
+            encoded1.append(task_id)
+            encoded2.append(crane_idx + 1)
+
+    if not encoded1:
+        return []
+
+    return compute_start_times(instance, encoded1, encoded2)
 
 def compute_finish_times(
     instance: QCSPInstance,
