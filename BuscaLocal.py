@@ -118,6 +118,8 @@ def guided_local_search_encoded(
 	alpha_1_cost: float = 1.0,
 	alpha_2_cost: float = 0.0,
 	feature_list: Optional[List[Callable[..., List[Feature]]]] = None, # funções de feature
+	debug: bool = False,
+	debug_every: int = 50,
 ) -> Tuple[List[int], List[int]]:
 	"""
 	Guided Local Search para QCSP usando representação encoded.
@@ -137,6 +139,9 @@ def guided_local_search_encoded(
 	"""
 	rng = random.Random(seed)
 
+	if debug:
+		print(f"[GLS] start | max_iters={max_iters} neighborhood_size={neighborhood_size} lambda={lambda_penalty}")
+
 	q = len(instance.cranes_ready)
 
 	if feature_list is None:
@@ -152,21 +157,27 @@ def guided_local_search_encoded(
 		encoded1, encoded2 = constructive_randomized_greedy(
 			instance, alpha=alpha, seed=seed, criterion=criterion
 		)
+		if debug:
+			print("[GLS] initial solution from constructive_randomized_greedy")
 	else:
 		encoded1, encoded2 = initial_encoded
+		if debug:
+			print("[GLS] initial solution provided")
 
 	is_feasible, start_times, finish_times = feasible(instance, encoded1, encoded2)
 
 	if not is_feasible:
 		raise ValueError("Solução inicial inválida para GLS.")
 
+
 	best_e1, best_e2 = _copy_encoded(encoded1, encoded2)
 	best_makespan = cost_function(finish_times, alpha_1_cost, alpha_2_cost)
 
+    
 	current_e1, current_e2 = _copy_encoded(best_e1, best_e2)
 	current_makespan = best_makespan
 
-	for _ in range(max_iters):
+	for it in range(max_iters):
 		candidates: List[Tuple[float, List[int], List[int], float]] = []  # (aug_cost, e1, e2, makespan)
 
 		for _k in range(neighborhood_size):
@@ -213,6 +224,8 @@ def guided_local_search_encoded(
 			candidates.append((aug_cost, e1, e2, ms))
 
 		if not candidates:
+			if debug:
+				print(f"[GLS] no candidates at iter={it}")
 			break
 
 		# ordena os candidatos pelo custo aumentado
@@ -223,6 +236,8 @@ def guided_local_search_encoded(
 		if current_makespan < best_makespan:
 			best_makespan = current_makespan
 			best_e1, best_e2 = _copy_encoded(current_e1, current_e2)
+			if debug:
+				print(f"[GLS] new best at iter={it}: {best_makespan:.3f}")
 
 		# Atualiza penalidades (GLS) com base nas features da solução corrente
 		is_feasible_cur, start_times_cur, finish_times_cur = feasible(instance, current_e1, current_e2)
@@ -250,5 +265,8 @@ def guided_local_search_encoded(
 			for u, key in utilities:
 				if abs(u - max_u) < 1e-9:
 					penalties[key] = penalties.get(key, 0) + 1
+
+		if debug and (it + 1) % debug_every == 0:
+			print(f"[GLS] iter={it+1} current={current_makespan:.3f} best={best_makespan:.3f} penalties={len(penalties)}")
 
 	return best_e1, best_e2
