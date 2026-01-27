@@ -1,6 +1,8 @@
 from typing import List, Tuple, Optional
 import random
 
+from RandomSeed import resolve_seed
+
 from Modelagem import QCSPInstance, feasible, cost_function, compute_crane_completion_times
 from Construtivo import constructive_randomized_greedy
 
@@ -310,7 +312,7 @@ def _apply_mutation(child: Encoded, instance: QCSPInstance, rng: random.Random) 
 def genetic_algorithm_encoded(
 	instance: QCSPInstance,
 	pop_size: int = 30,
-	generations: int = 200,
+	generations: int = 1000,
 	crossover_rate: float = 0.7,
 	mutation_rate: float = 0.3,
 	seed: Optional[int] = None,
@@ -326,7 +328,7 @@ def genetic_algorithm_encoded(
 	Returns:
 		(encoded1, encoded2)
 	"""
-	rng = random.Random(seed)
+	rng = random.Random(resolve_seed(seed))
 
 	n = len(instance.processing_times)
 	q = len(instance.cranes_ready)

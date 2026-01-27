@@ -1,6 +1,8 @@
 from typing import List, Tuple, Dict, Set, Optional
 import random
 
+from RandomSeed import resolve_seed
+
 from Modelagem import *
 
 
@@ -168,8 +170,9 @@ def constructive_randomized_greedy(
 
         return encoded1, encoded2
 
+    base_seed = resolve_seed(seed)
     for attempt in range(max_restarts + 1):
-        attempt_seed = seed if attempt == 0 else (seed if seed is not None else 0) + attempt + 1
+        attempt_seed = base_seed if attempt == 0 else base_seed + attempt + 1
         rng = random.Random(attempt_seed)
         try:
             return _attempt_build(rng)

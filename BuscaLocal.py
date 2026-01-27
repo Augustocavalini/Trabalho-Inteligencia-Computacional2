@@ -1,6 +1,8 @@
 from typing import List, Tuple, Optional, Dict, Callable, Iterable
 import random
 
+from RandomSeed import resolve_seed
+
 from Modelagem import (
 	QCSPInstance,
 	cost_function,
@@ -308,7 +310,7 @@ def guided_local_search_encoded(
 	Returns:
 		(encoded1, encoded2)
 	"""
-	rng = random.Random(seed)
+	rng = random.Random(resolve_seed(seed))
 
 	if debug:
 		print(f"[GLS] start | max_iters={max_iters} neighborhood_size={neighborhood_size} lambda={lambda_penalty} stagnation_limit={stagnation_limit}")
