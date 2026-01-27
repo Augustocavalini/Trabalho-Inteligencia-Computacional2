@@ -15,7 +15,7 @@ instances_dir = Path("instances")
 instances = [load_instance(p) for p in sorted(instances_dir.glob("*.txt"))]
 
 
-debug = False
+debug = True
 
 run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
 results: List[Dict[str, Any]] = []
@@ -31,7 +31,7 @@ def dbg(*args, **kwargs):
 # dbg()
 
 
-for instance in instances:
+for instance in instances[0:2]:
     print(f"Solving instance: {instance.name}")
     # start_times, resultado = constructive_est(instance)
     criterion = "est"

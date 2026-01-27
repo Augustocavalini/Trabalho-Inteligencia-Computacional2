@@ -16,7 +16,10 @@ def plot_gantt_by_bay(
     save_path: Optional[Path] = None,
     show: bool = False,
 ) -> None:
-    """Plota Gantt com linhas por bay e setas de movimentação dos guindastes."""
+    """Plota Gantt com linhas por bay e setas de movimentação dos guindastes.
+    
+    Inclui indicadores de tempo de início e fim das tarefas na base e topo dos retângulos.
+    """
     start_times = compute_start_times(instance, encoded1, encoded2)
     finish_times = compute_finish_times(instance, start_times)
 
@@ -30,7 +33,7 @@ def plot_gantt_by_bay(
 
     colors = plt.cm.get_cmap("tab20", q)
 
-    fig, ax = plt.subplots(figsize=(12, 6))
+    fig, ax = plt.subplots(figsize=(14, 6))
 
     # índices válidos (evita NaN/inf e tempos negativos)
     valid_tasks = [
@@ -58,6 +61,8 @@ def plot_gantt_by_bay(
             alpha=0.9,
         )
         ax.add_patch(rect)
+        
+        # Rótulo da tarefa no centro
         ax.text(
             start + (finish - start) / 2,
             bay,
@@ -65,8 +70,33 @@ def plot_gantt_by_bay(
             ha="center",
             va="center",
             fontsize=8,
-            color="black",
+            color="#2a2a2a",
+            weight="bold",
             clip_on=True,
+        )
+        
+        # Indicador de tempo no topo (início)
+        ax.text(
+            start,
+            bay + 0.5,
+            f"{int(start)}",
+            ha="right",
+            va="bottom",
+            fontsize=7,
+            color="darkgreen",
+            weight="bold",
+        )
+        
+        # Indicador de tempo na base (fim)
+        ax.text(
+            finish,
+            bay - 0.5,
+            f"{int(finish)}",
+            ha="left",
+            va="top",
+            fontsize=7,
+            color="darkred",
+            weight="bold",
         )
 
     # setas de movimentação por guindaste
@@ -99,17 +129,18 @@ def plot_gantt_by_bay(
                 annotation_clip=True,
             )
 
-    ax.set_title(title)
-    ax.set_xlabel("Tempo")
-    ax.set_ylabel("Bay")
+    ax.set_title(title, fontsize=14, weight="bold", pad=20)
+    ax.set_xlabel("Tempo", fontsize=11)
+    ax.set_ylabel("Bay", fontsize=11)
     ax.set_yticks(range(1, instance.bays + 1))
-    ax.set_ylim(0.5, instance.bays + 0.5)
+    ax.set_ylim(0.2, instance.bays + 0.8)
+    ax.set_facecolor("#f0f0f0")
     ax.grid(axis="x", linestyle="--", alpha=0.3)
 
     if valid_tasks:
         min_start = min(start_times[i] for i in valid_tasks)
         max_finish = max(finish_times[i] for i in valid_tasks)
-        pad = max((max_finish - min_start) * 0.03, 1.0)
+        pad = max((max_finish - min_start) * 0.05, 1.0)
         ax.set_xlim(min_start - pad, max_finish + pad)
     else:
         ax.set_xlim(0, 1)
